@@ -1,6 +1,7 @@
-import { describe, it, expect, vi } from "vitest";
+import { describe, it, expect, vi, afterEach } from "vitest";
 import "../src/noche-solar-card";
 import { APARATOS, ATTRS_EJEMPLO, COMPACTA_EJEMPLO, noches } from "./fixtures";
+import { REFRESCO_HORAS_MS } from "../src/noche-solar-card";
 
 type Card = HTMLElement & { setConfig(c: unknown): void; hass: unknown; updateComplete: Promise<boolean> };
 
@@ -130,6 +131,31 @@ describe("historial", () => {
     await m.click(cols[0]);
     expect(m.$(".nav .d")?.textContent).toContain("24-10 → 25-10");
   });
+
+  it("la noche elegida se guarda por su inicio: si entra una noche nueva, sigue elegida la misma", async () => {
+    const m = await mount(makeHass(ATTRS_EJEMPLO, noches(3)));
+    await m.click(m.$$(".sec > button")[1]);
+    await m.click(m.$(".nav .prev"));
+    expect(m.$(".nav .d")?.textContent).toContain("05-11 → 06-11");
+    const nueva = { ...noches(1)[0], i: "2026-11-07T16:30:00.000Z", f: "2026-11-08T08:30:00.000Z" };
+    m.card.hass = makeHass(ATTRS_EJEMPLO, [nueva, ...noches(3)]);
+    await m.card.updateComplete;
+    expect(m.$$(".hist .col")).toHaveLength(4);
+    expect(m.$(".nav .d")?.textContent).toContain("05-11 → 06-11");
+    expect(m.$(".hist .col.on")?.getAttribute("aria-label")).toContain("05-11");
+  });
+
+  it("si la noche elegida sale del historial, se vuelve a la más reciente", async () => {
+    const m = await mount(makeHass(ATTRS_EJEMPLO, noches(3)));
+    await m.click(m.$$(".sec > button")[1]);
+    await m.click(m.$(".nav .prev"));
+    await m.click(m.$(".nav .prev"));
+    expect(m.$(".nav .d")?.textContent).toContain("04-11 → 05-11");
+    m.card.hass = makeHass(ATTRS_EJEMPLO, noches(2));
+    await m.card.updateComplete;
+    expect(m.$(".nav .d")?.textContent).toContain("06-11 → 07-11");
+    expect((m.$(".nav .next") as HTMLButtonElement).disabled).toBe(true);
+  });
 });
 
 describe("por horas", () => {
@@ -165,5 +191,89 @@ describe("por horas", () => {
     await new Promise((r) => setTimeout(r, 0));
     await m.card.updateComplete;
     expect(m.$(".sec .body")?.textContent).toContain("No se pudieron cargar las horas");
+  });
+
+  describe("en curso", () => {
+    afterEach(() => vi.useRealTimers());
+    const EN_CURSO = { ...ATTRS_EJEMPLO, estado: "en_curso", fin: null };
+    const nuevoHass = (callWS: ReturnType<typeof vi.fn>, attrs: Record<string, unknown> = EN_CURSO) => makeHass(attrs, noches(1), callWS);
+    const esperar = async (m: { card: Card }) => {
+      await Promise.resolve();
+      await Promise.resolve();
+      await m.card.updateComplete;
+    };
+
+    it("con «Por horas» abierto se refrescan las estadísticas cada ~5 min, sin tormenta de peticiones", async () => {
+      vi.useFakeTimers({ toFake: ["Date"] });
+      vi.setSystemTime(Date.parse("2026-11-05T20:00:00Z"));
+      const callWS = vi.fn().mockResolvedValue({});
+      const m = await mount(nuevoHass(callWS));
+      await m.click(m.$$(".sec > button")[0]);
+      expect(callWS).toHaveBeenCalledTimes(1);
+      await esperar(m);
+      // muchas actualizaciones de hass seguidas: ninguna petición nueva
+      for (let k = 0; k < 5; k++) {
+        vi.setSystemTime(Date.now() + 30_000);
+        m.card.hass = nuevoHass(callWS);
+        await esperar(m);
+      }
+      expect(callWS).toHaveBeenCalledTimes(1);
+      vi.setSystemTime(Date.parse("2026-11-05T20:00:00Z") + REFRESCO_HORAS_MS);
+      m.card.hass = nuevoHass(callWS);
+      await esperar(m);
+      expect(callWS).toHaveBeenCalledTimes(2);
+      m.card.hass = nuevoHass(callWS);
+      await esperar(m);
+      expect(callWS).toHaveBeenCalledTimes(2);
+      expect(REFRESCO_HORAS_MS).toBe(5 * 60_000);
+    });
+
+    it("mientras refresca no enseña «Cargando…»: deja las horas de antes", async () => {
+      vi.useFakeTimers({ toFake: ["Date"] });
+      vi.setSystemTime(Date.parse("2026-11-05T20:00:00Z"));
+      const t0 = Date.parse("2026-11-05T16:00:00Z");
+      let soltar: (v: unknown) => void = () => undefined;
+      const callWS = vi.fn()
+        .mockResolvedValueOnce({ [ENERGIA[0]]: [{ start: t0, change: 0.8 }] })
+        .mockImplementationOnce(() => new Promise((r) => (soltar = r)));
+      const m = await mount(nuevoHass(callWS));
+      await m.click(m.$$(".sec > button")[0]);
+      await esperar(m);
+      expect(m.$$(".horas .col")).toHaveLength(1);
+      vi.setSystemTime(Date.now() + REFRESCO_HORAS_MS + 1);
+      m.card.hass = nuevoHass(callWS);
+      await esperar(m);
+      expect(callWS).toHaveBeenCalledTimes(2);
+      expect(m.$$(".horas .col")).toHaveLength(1);
+      expect(m.$(".sec .body")?.textContent).not.toContain("Cargando");
+      // en vuelo: aunque pase el tiempo, no se pide otra vez
+      vi.setSystemTime(Date.now() + 2 * REFRESCO_HORAS_MS);
+      m.card.hass = nuevoHass(callWS);
+      await esperar(m);
+      expect(callWS).toHaveBeenCalledTimes(2);
+      soltar({ [ENERGIA[0]]: [{ start: t0, change: 0.8 }, { start: t0 + 3600_000, change: 0.5 }] });
+      await esperar(m);
+      expect(m.$$(".horas .col")).toHaveLength(2);
+    });
+
+    it("una noche cerrada no se refresca, ni con el desplegable cerrado", async () => {
+      vi.useFakeTimers({ toFake: ["Date"] });
+      vi.setSystemTime(Date.parse("2026-11-06T20:00:00Z"));
+      const callWS = vi.fn().mockResolvedValue({});
+      const m = await mount(nuevoHass(callWS, ATTRS_EJEMPLO));
+      await m.click(m.$$(".sec > button")[0]);
+      await esperar(m);
+      vi.setSystemTime(Date.now() + 3 * REFRESCO_HORAS_MS);
+      m.card.hass = nuevoHass(callWS, ATTRS_EJEMPLO);
+      await esperar(m);
+      expect(callWS).toHaveBeenCalledTimes(1);
+
+      const callWS2 = vi.fn().mockResolvedValue({});
+      const m2 = await mount(nuevoHass(callWS2));
+      vi.setSystemTime(Date.now() + 3 * REFRESCO_HORAS_MS);
+      m2.card.hass = nuevoHass(callWS2);
+      await esperar(m2);
+      expect(callWS2).not.toHaveBeenCalled();
+    });
   });
 });

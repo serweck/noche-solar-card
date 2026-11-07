@@ -12,6 +12,8 @@ export const CARD_VERSION = "0.1.0";
 export const SIN_DATOS = "Sin datos de la noche solar";
 /** Barras del historial a la vista. */
 export const BARRAS_HISTORIAL = 14;
+/** Con la noche en curso y «Por horas» abierto, las estadísticas se piden otra vez si tienen más de esto. */
+export const REFRESCO_HORAS_MS = 5 * 60_000;
 
 export { APARATOS_POR_DEFECTO };
 
@@ -29,7 +31,8 @@ export function validateConfig(config: Partial<CardConfig> | undefined): CardCon
   return config as CardConfig;
 }
 
-type EstadoHoras = { clave: string; cargando: boolean; datos: Hora[] | null; error: boolean };
+/** `pedido`: cuándo se pidieron o, ya contestadas, cuándo llegaron (Date.now()); `enVuelo`: hay una petición sin contestar. */
+type EstadoHoras = { clave: string; cargando: boolean; datos: Hora[] | null; error: boolean; pedido: number; enVuelo: boolean };
 
 export class NocheSolarCard extends LitElement {
   static styles = styles;
@@ -46,15 +49,16 @@ export class NocheSolarCard extends LitElement {
   declare private _config?: CardConfig;
   declare private _abiertoHoras: boolean;
   declare private _abiertoHist: boolean;
-  /** Noche elegida en el historial (0 = la más reciente). */
-  declare private _sel: number;
+  /** `inicio` de la noche elegida en el historial (null = la más reciente). Por inicio y no por posición:
+   * al entrar una noche nueva no se corre la elegida. */
+  declare private _sel: string | null;
   declare private _horas: EstadoHoras | null;
 
   constructor() {
     super();
     this._abiertoHoras = false;
     this._abiertoHist = false;
-    this._sel = 0;
+    this._sel = null;
     this._horas = null;
   }
 
@@ -99,13 +103,16 @@ export class NocheSolarCard extends LitElement {
     if (this._abiertoHoras) this._pedirHoras();
   }
 
-  /** Pide las horas de la noche de arriba si aún no están (o son de otra noche). */
+  /** Pide las horas de la noche de arriba si aún no están (o son de otra noche). Con la noche en curso, también
+   * si las que hay tienen más de REFRESCO_HORAS_MS (como mucho una petición a la vez: nada de ráfagas). */
   private _pedirHoras(): void {
     const n = this._noche();
     const ids = this._config?.energia;
     if (!n || !ids || !this.hass?.callWS) return;
     const clave = `${n.inicio}|${n.fin ?? ""}`;
-    if (this._horas?.clave === clave) return;
+    const previo = this._horas?.clave === clave ? this._horas : null;
+    const caducado = !!previo && n.estado === "en_curso" && !previo.enVuelo && Date.now() - previo.pedido >= REFRESCO_HORAS_MS;
+    if (previo && !caducado) return;
     const desde = new Date(n.inicio);
     desde.setMinutes(0, 0, 0);
     const msg: Record<string, unknown> = {
@@ -116,10 +123,17 @@ export class NocheSolarCard extends LitElement {
       types: ["change"],
     };
     if (n.fin) msg.end_time = new Date(n.fin).toISOString();
-    this._horas = { clave, cargando: true, datos: null, error: false };
+    // Al refrescar se dejan las horas de antes a la vista (sin «Cargando…»).
+    const antes = previo?.datos ?? null;
+    const estado: EstadoHoras = { clave, cargando: !antes, datos: antes, error: false, pedido: Date.now(), enVuelo: true };
+    this._horas = estado;
+    // La cuenta de REFRESCO_HORAS_MS empieza al contestar: una respuesta lenta no encadena otra petición.
+    const fin = (datos: Hora[] | null, error: boolean) => {
+      if (this._horas === estado) this._horas = { clave, cargando: false, datos, error, pedido: Date.now(), enVuelo: false };
+    };
     this.hass.callWS<Estadisticas>(msg as never).then(
-      (r) => this._horas?.clave === clave && (this._horas = { clave, cargando: false, datos: horas(r ?? {}, ids), error: false }),
-      () => this._horas?.clave === clave && (this._horas = { clave, cargando: false, datos: null, error: true }),
+      (r) => fin(horas(r ?? {}, ids), false),
+      () => fin(antes, !antes),
     );
   }
 
@@ -241,7 +255,8 @@ export class NocheSolarCard extends LitElement {
   private _cuerpoHistorial(): TemplateResult {
     const { noches, mensaje } = this._historial();
     if (mensaje) return html`<div class="msg">${mensaje}</div>`;
-    const sel = Math.min(this._sel, noches.length - 1);
+    const k = this._sel === null ? -1 : noches.findIndex((x) => x.inicio === this._sel);
+    const sel = k < 0 ? 0 : k;
     // Ventana de 14 barras que siempre contiene la elegida; la más antigua a la izquierda.
     const desde = Math.max(0, Math.min(sel - (BARRAS_HISTORIAL - 1), noches.length - BARRAS_HISTORIAL));
     const idx = Array.from({ length: Math.min(BARRAS_HISTORIAL, noches.length) }, (_, k) => desde + k).reverse();
@@ -257,16 +272,16 @@ export class NocheSolarCard extends LitElement {
           const t: Tramos = [m.bateria, m.red, m.sol];
           return html`<button class="col ${i === sel ? "on" : ""}" title="${fecha(m.inicio, tz)}: ${kwh(m.total)} kWh"
             aria-label="Noche del ${fecha(m.inicio, tz)}: ${kwh(m.total)} kWh" aria-pressed=${String(i === sel)}
-            @click=${() => (this._sel = i)}>
+            @click=${() => (this._sel = noches[i].inicio)}>
             ${this._pila(t, ((t[0] + t[1] + t[2]) / max) * 100)}
             <div class="lab">${(idx.length - 1 - k) % paso === 0 ? fecha(m.inicio, tz) : ""}</div>
           </button>`;
         })}
       </div>
       <div class="nav">
-        <button class="prev" aria-label="Noche anterior" ?disabled=${sel >= noches.length - 1} @click=${() => (this._sel = sel + 1)}>←</button>
+        <button class="prev" aria-label="Noche anterior" ?disabled=${sel >= noches.length - 1} @click=${() => (this._sel = noches[sel + 1].inicio)}>←</button>
         <span class="d">${c.titulo.replace("Noche solar · ", "")}${c.etiqueta ? html`<span class="badge">${c.etiqueta}</span>` : nothing}</span>
-        <button class="next" aria-label="Noche siguiente" ?disabled=${sel <= 0} @click=${() => (this._sel = sel - 1)}>→</button>
+        <button class="next" aria-label="Noche siguiente" ?disabled=${sel <= 0} @click=${() => (this._sel = noches[sel - 1].inicio)}>→</button>
       </div>
       ${this._renderNoche(elegida)}
     `;
