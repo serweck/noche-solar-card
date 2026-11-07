@@ -1,0 +1,40 @@
+{
+  "name": "noche-solar-card",
+  "version": "0.1.0",
+  "description": "Tarjeta Lovelace para Home Assistant que enseña en qué se gasta la batería cada noche solar: kWh por aparato partidos en batería, red y sol",
+  "type": "module",
+  "main": "dist/noche-solar-card.js",
+  "scripts": {
+    "build": "rollup -c",
+    "watch": "rollup -c --watch",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "preview": "http-server . -p 8767 -c-1 --cors"
+  },
+  "keywords": [
+    "home-assistant",
+    "lovelace",
+    "custom-card",
+    "solar",
+    "battery",
+    "victron"
+  ],
+  "author": "Serweck",
+  "license": "MIT",
+  "dependencies": {
+    "custom-card-helpers": "^1.9.0",
+    "lit": "^3.1.2"
+  },
+  "devDependencies": {
+    "@rollup/plugin-json": "^6.1.0",
+    "@rollup/plugin-node-resolve": "^15.2.3",
+    "@rollup/plugin-terser": "^0.4.4",
+    "@rollup/plugin-typescript": "^11.1.6",
+    "http-server": "^14.1.1",
+    "jsdom": "^25.0.1",
+    "rollup": "^4.13.0",
+    "tslib": "^2.6.2",
+    "typescript": "^5.4.5",
+    "vitest": "^2.1.0"
+  }
+}

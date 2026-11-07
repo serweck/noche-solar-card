@@ -1,0 +1,81 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>noche-solar-card · vista previa</title>
+<style>
+  body { background:#111; color:#e1e1e1; font-family:Roboto, "Segoe UI", sans-serif; padding:16px; margin:0;
+         --primary-text-color:#e1e1e1; --secondary-text-color:#9b9b9b; --card-background-color:#1c1c1c;
+         --ha-card-background:#1c1c1c; --secondary-background-color:#262626; --divider-color:#2c2c2c;
+         --primary-color:#3b82f6; --text-primary-color:#fff; }
+  body.light { background:#f3f3f3; color:#212121; --primary-text-color:#212121; --secondary-text-color:#727272;
+         --card-background-color:#fff; --ha-card-background:#fff; --secondary-background-color:#eee; --divider-color:#e0e0e0; }
+  ha-card { display:block; background:var(--ha-card-background); color:var(--primary-text-color); border:1px solid var(--divider-color); border-radius:12px; }
+  .wrap { display:flex; gap:24px; flex-wrap:wrap; align-items:flex-start; }
+  .col { width:520px; max-width:100%; } h3 { font-weight:500; color:var(--secondary-text-color); font-size:13px; margin:0 0 8px; }
+  .bar-top { margin-bottom:12px; font-size:12px; } .bar-top a { color:var(--primary-color); }
+</style>
+</head>
+<body>
+<div class="bar-top"><a href="?">Oscuro</a> · <a href="?light">Claro</a></div>
+<div class="wrap">
+  <div class="col"><h3>Ejemplo del spec (05-11 → 06-11, sin carga solar)</h3><div id="a"></div></div>
+  <div class="col"><h3>Noche en curso, con algo de sol</h3><div id="b"></div></div>
+  <div class="col"><h3>Sin datos y sin historial</h3><div id="c"></div></div>
+</div>
+<script type="module">
+  if (location.search.includes("light")) document.body.classList.add("light");
+  customElements.define("ha-card", class extends HTMLElement {});
+  await import("./dist/noche-solar-card.js");
+
+  const APARATOS = [["aerotermia", "Aerotermia"], ["cocina", "Cocina"], ["despacho", "Despacho"], ["domotica", "Domótica"],
+    ["acs", "ACS"], ["jacuzzi", "Jacuzzi"], ["piscina", "Piscina"], ["bomba_aerotermia", "Bomba Aerotermia"],
+    ["calentador_agua_2", "Calentador Agua 2"], ["subcuadro_resto", "Subcuadro (resto)"], ["otros", "Otros"]]
+    .map(([slug, nombre]) => ({ slug, nombre }));
+  const ENERGIA = ["sensor.noche_solar_energia_bateria", "sensor.noche_solar_energia_red", "sensor.noche_solar_energia_sol"];
+  const config = { entity: "sensor.noche_solar", historial: "sensor.noche_solar_historial", energia: ENERGIA, aparatos: APARATOS };
+
+  const ejemplo = { aerotermia: [3.6, 1.5, 0], cocina: [0, 0, 0], despacho: [0.9, 0.2, 0], domotica: [0.8, 0.2, 0], acs: [3.0, 0, 0],
+    jacuzzi: [0, 2.0, 0], piscina: [0, 0, 0], bomba_aerotermia: [0, 0, 0], calentador_agua_2: [0, 0, 0], subcuadro_resto: [0, 0, 0], otros: [1.3, 1.3, 0] };
+  const noche = { estado: "sin_carga_solar", inicio: "2026-11-05T17:02:00+01:00", fin: "2026-11-06T13:30:00+01:00",
+    soc_inicio: 100, soc_fin: 13, aparatos: ejemplo, total: 14.8, bateria: 9.6, red: 5.2, sol: 0, red_a_bateria: 8.1, acum: [0, 0, 0] };
+
+  // Historial: la del ejemplo y 19 anteriores inventadas (la más reciente primero).
+  const pos = (o) => APARATOS.map((a) => o[a.slug]);
+  const r2 = (x) => Math.round(x * 100) / 100;
+  const noches = [{ i: noche.inicio, f: noche.fin, e: "sin_carga_solar", si: 100, sf: 13, t: 14.8, b: 9.6, r: 5.2, s: 0, rb: 8.1, a: pos(ejemplo) }];
+  for (let k = 1; k < 20; k++) {
+    const i = new Date(Date.UTC(2026, 10, 5 - k, 16, 40 + (k % 3) * 10)), f = new Date(i.getTime() + (15.5 + (k % 4) / 2) * 3600e3);
+    const esc = 0.7 + ((k * 37) % 50) / 100, red = (k % 5) / 10;
+    const a = Object.fromEntries(Object.entries(ejemplo).map(([s, v]) => { const t = (v[0] + v[1]) * esc; return [s, [r2(t * (1 - red)), r2(t * red), 0]]; }));
+    const sum = (j) => r2(Object.values(a).reduce((x, v) => x + v[j], 0));
+    noches.push({ i: i.toISOString(), f: f.toISOString(), e: "cerrada", si: 100, sf: 20 + (k % 30), t: r2(sum(0) + sum(1)), b: sum(0), r: sum(1), s: 0, rb: 0, a: pos(a) });
+  }
+
+  // Estadísticas por hora: batería la mayor parte, red al final (como si la batería se acabase).
+  const callWS = async (msg) => {
+    const start = Date.parse(msg.start_time), end = msg.end_time ? Date.parse(msg.end_time) : Date.now();
+    const out = { [ENERGIA[0]]: [], [ENERGIA[1]]: [], [ENERGIA[2]]: [] };
+    for (let t = start, k = 0; t < end; t += 3600e3, k++) {
+      const c = 0.4 + ((k * 7) % 5) / 10;
+      if (k < 13) out[ENERGIA[0]].push({ start: t, change: c }); else out[ENERGIA[1]].push({ start: t, change: c });
+      if (k === 0) out[ENERGIA[2]].push({ start: t, change: 0.2 });
+    }
+    return out;
+  };
+
+  const st = (state, attributes) => ({ state, attributes });
+  const hass = (states) => ({ states, config: { time_zone: "Europe/Madrid" }, language: "es", callWS });
+  const mount = (id, states) => { const c = document.createElement("noche-solar-card"); c.setConfig(config); c.hass = hass(states); document.getElementById(id).appendChild(c); };
+
+  const hist = st(String(noches.length), { noches });
+  mount("a", { "sensor.noche_solar": st("14.8", noche), "sensor.noche_solar_historial": hist });
+  const ahora = new Date(Date.now() - 5 * 3600e3).toISOString();
+  mount("b", { "sensor.noche_solar_historial": hist, "sensor.noche_solar": st("4.3", { ...noche, estado: "en_curso", inicio: ahora, fin: null, soc_fin: null,
+    aparatos: { ...ejemplo, aerotermia: [1.6, 0, 0.3], acs: [1.2, 0, 0], jacuzzi: [0, 0, 0], otros: [0.9, 0, 0.1] },
+    total: 4.3, bateria: 3.9, red: 0, sol: 0.4, red_a_bateria: 0 }) });
+  mount("c", { "sensor.noche_solar": st("unknown", {}) });
+</script>
+</body>
+</html>
