@@ -4,6 +4,26 @@ import type { Aparato, Cabecera, EstadoNoche, Fila, Hora, Noche, NocheCompacta, 
 export const CASI_CERO = 0.05;
 export const SIN_NOCHES = "Aún no hay noches guardadas";
 
+/**
+ * APARATOS de Paneles/tools/noche_solar.py, en su orden. El historial guarda los tramos de cada noche por posición
+ * en este orden, así que se lee siempre con él (nunca con el de la config).
+ */
+export const APARATOS_POR_DEFECTO: Aparato[] = [
+  { slug: "aerotermia", nombre: "Aerotermia" },
+  { slug: "cocina", nombre: "Cocina" },
+  { slug: "despacho", nombre: "Despacho" },
+  { slug: "domotica", nombre: "Domótica" },
+  { slug: "acs", nombre: "ACS" },
+  { slug: "jacuzzi", nombre: "Jacuzzi" },
+  { slug: "piscina", nombre: "Piscina" },
+  { slug: "bomba_aerotermia", nombre: "Bomba Aerotermia" },
+  { slug: "calentador_agua_2", nombre: "Calentador Agua 2" },
+  { slug: "subcuadro_resto", nombre: "Subcuadro (resto)" },
+  { slug: "otros", nombre: "Otros" },
+];
+/** Slugs en el orden del historial. */
+export const SLUGS_HISTORIAL = APARATOS_POR_DEFECTO.map((a) => a.slug);
+
 const ESTADOS: EstadoNoche[] = ["en_curso", "cerrada", "sin_carga_solar"];
 
 const num = (v: unknown): number => {
@@ -73,7 +93,7 @@ export function nocheDeHistorial(c: NocheCompacta | null | undefined, slugs: str
 }
 
 /** Las noches del atributo `noches` del historial (la más reciente primero). */
-export function leerHistorial(noches: unknown, slugs: string[]): { noches: Noche[]; mensaje: string | null } {
+export function leerHistorial(noches: unknown, slugs: string[] = SLUGS_HISTORIAL): { noches: Noche[]; mensaje: string | null } {
   const l = (Array.isArray(noches) ? noches : [])
     .map((c) => nocheDeHistorial(c as NocheCompacta, slugs))
     .filter((n): n is Noche => n !== null);
@@ -98,10 +118,15 @@ export function filas(n: Noche, aparatos: Aparato[]): Fila[] {
   }));
 }
 
+/** La noche tiró del sol: la cifra «Del sol» solo sale por encima de CASI_CERO. */
+export const haySol = (n: Noche): boolean => n.sol > CASI_CERO;
+/** El aparato tiró del sol: su tramo se escribe si no redondea a 0 (≥ CASI_CERO, como las filas). */
+export const tramoSol = (f: Fila): boolean => f.tramos[2] >= CASI_CERO;
+
 /** «5,1 (3,6 + 1,5)», y «+ sol» si el aparato tiró del sol. */
 export function numeros(f: Fila): string {
   const partes = [kwh(f.tramos[0]), kwh(f.tramos[1])];
-  if (f.tramos[2] >= CASI_CERO) partes.push(kwh(f.tramos[2]));
+  if (tramoSol(f)) partes.push(kwh(f.tramos[2]));
   return `${kwh(f.total)} (${partes.join(" + ")})`;
 }
 
@@ -118,7 +143,7 @@ export function cifras(n: Noche): Cifra[] {
     { nombre: "De batería", valor: kwh(n.bateria), clase: "bat" },
     { nombre: "De la red", valor: kwh(n.red), clase: "red" },
   ];
-  if (n.sol > CASI_CERO) l.push({ nombre: "Del sol", valor: kwh(n.sol), clase: "sol" });
+  if (haySol(n)) l.push({ nombre: "Del sol", valor: kwh(n.sol), clase: "sol" });
   return l;
 }
 

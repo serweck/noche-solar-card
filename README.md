@@ -27,7 +27,7 @@ energia:                                         # opcional: sin ellos no hay «
   - sensor.noche_solar_energia_bateria
   - sensor.noche_solar_energia_red
   - sensor.noche_solar_energia_sol
-aparatos:                                        # opcional; por defecto, los de abajo
+aparatos:                                        # opcional: qué filas y con qué nombre; por defecto, todas
   - { slug: aerotermia, nombre: Aerotermia }
   - { slug: cocina, nombre: Cocina }
   - { slug: despacho, nombre: Despacho }
@@ -41,7 +41,9 @@ aparatos:                                        # opcional; por defecto, los de
   - { slug: otros, nombre: Otros }
 ```
 
-> **El orden de `aparatos` importa.** El historial guarda los kWh de cada aparato por posición (sin el nombre, para caber en el límite de 16 KB del recorder), en el orden de `APARATOS` de `tools/noche_solar.py`. Si se cambia esa lista, hay que cambiar esta igual. Se pueden renombrar (`nombre`), pero no reordenar ni quitar entradas del medio.
+`aparatos` decide qué filas se ven y con qué nombre (salen siempre de mayor a menor consumo): se pueden quitar, renombrar o reordenar sin miedo.
+
+> **El historial no depende de `aparatos`.** Cada noche guardada lleva los kWh de los aparatos por posición (sin el nombre, para caber en el límite de 16 KB del recorder), en el orden de `APARATOS` de `tools/noche_solar.py`. La tarjeta los lee siempre con ese orden fijo, que lleva dentro. Si algún día cambia `APARATOS` (un aparato nuevo, otro orden), hay que cambiar también `APARATOS_POR_DEFECTO` en `src/model.ts` y sacar una versión nueva.
 
 Las horas se ven en la zona horaria de HA.
 

@@ -1,7 +1,10 @@
 import { LitElement, html, nothing, type TemplateResult } from "lit";
 import type { HomeAssistant } from "custom-card-helpers";
 import type { Aparato, CardConfig, Hora, Noche, Tramos } from "./types";
-import { cabecera, cifras, fecha, filas, hora, horas, kwh, leerHistorial, nocheActual, numeros, type Estadisticas } from "./model";
+import {
+  APARATOS_POR_DEFECTO, CASI_CERO, cabecera, cifras, fecha, filas, haySol, hora, horas, kwh, leerHistorial, nocheActual, numeros, tramoSol,
+  type Estadisticas,
+} from "./model";
 import { styles } from "./styles";
 
 export const CARD_TAG = "noche-solar-card";
@@ -10,25 +13,12 @@ export const SIN_DATOS = "Sin datos de la noche solar";
 /** Barras del historial a la vista. */
 export const BARRAS_HISTORIAL = 14;
 
-/** Los de APARATOS en Paneles/tools/noche_solar.py, en su orden (el del historial). */
-export const APARATOS_POR_DEFECTO: Aparato[] = [
-  { slug: "aerotermia", nombre: "Aerotermia" },
-  { slug: "cocina", nombre: "Cocina" },
-  { slug: "despacho", nombre: "Despacho" },
-  { slug: "domotica", nombre: "Domótica" },
-  { slug: "acs", nombre: "ACS" },
-  { slug: "jacuzzi", nombre: "Jacuzzi" },
-  { slug: "piscina", nombre: "Piscina" },
-  { slug: "bomba_aerotermia", nombre: "Bomba Aerotermia" },
-  { slug: "calentador_agua_2", nombre: "Calentador Agua 2" },
-  { slug: "subcuadro_resto", nombre: "Subcuadro (resto)" },
-  { slug: "otros", nombre: "Otros" },
-];
+export { APARATOS_POR_DEFECTO };
 
 export function validateConfig(config: Partial<CardConfig> | undefined): CardConfig {
   if (!config?.entity) throw new Error("entity es obligatorio");
   if (config.aparatos !== undefined) {
-    if (!Array.isArray(config.aparatos)) throw new Error("aparatos debe ser una lista de {slug, nombre}, en el orden de APARATOS");
+    if (!Array.isArray(config.aparatos)) throw new Error("aparatos debe ser una lista de {slug, nombre}");
     config.aparatos.forEach((a, i) => {
       if (!a?.slug) throw new Error(`aparatos[${i}].slug es obligatorio`);
     });
@@ -72,6 +62,14 @@ export class NocheSolarCard extends LitElement {
     this._config = validateConfig(config);
   }
 
+  static getStubConfig(): Partial<CardConfig> {
+    return {
+      entity: "sensor.noche_solar",
+      historial: "sensor.noche_solar_historial",
+      energia: ["sensor.noche_solar_energia_bateria", "sensor.noche_solar_energia_red", "sensor.noche_solar_energia_sol"],
+    };
+  }
+
   getCardSize(): number {
     return 7;
   }
@@ -92,10 +90,12 @@ export class NocheSolarCard extends LitElement {
   private _historial() {
     const id = this._config?.historial;
     const attrs = id ? this.hass?.states[id]?.attributes : undefined;
-    return leerHistorial(attrs?.noches, this._aparatos.map((a) => a.slug));
+    // Siempre con el orden fijo de APARATOS: la config solo elige, renombra y ordena las filas.
+    return leerHistorial(attrs?.noches);
   }
 
-  protected updated(): void {
+  /** Antes de pintar (no después): así el cambio de `_horas` entra en esta misma actualización. */
+  protected willUpdate(): void {
     if (this._abiertoHoras) this._pedirHoras();
   }
 
@@ -160,7 +160,7 @@ export class NocheSolarCard extends LitElement {
     const c = cabecera(n, this._tz);
     const cs = cifras(n);
     const fs = filas(n, this._aparatos);
-    const conSol = n.sol > 0.05 || fs.some((f) => f.tramos[2] >= 0.05);
+    const conSol = haySol(n) || fs.some(tramoSol);
     return html`
       <div class="meta">${c.horas}${c.soc ? html` · ${c.soc}` : nothing}</div>
       <div class="src ${cs.length > 3 ? "n4" : ""}" style="--ns-n:${cs.length}">
@@ -179,7 +179,7 @@ export class NocheSolarCard extends LitElement {
               </div>`)}
             </div>`
         : html`<div class="msg">Aún sin consumo por aparatos</div>`}
-      ${n.redABateria >= 0.05 ? html`<div class="valle">+ Red → batería (valle): ${kwh(n.redABateria)} kWh</div>` : nothing}
+      ${n.redABateria >= CASI_CERO ? html`<div class="valle">+ Red → batería (valle): ${kwh(n.redABateria)} kWh</div>` : nothing}
     `;
   }
 
@@ -256,6 +256,7 @@ export class NocheSolarCard extends LitElement {
           const m = noches[i];
           const t: Tramos = [m.bateria, m.red, m.sol];
           return html`<button class="col ${i === sel ? "on" : ""}" title="${fecha(m.inicio, tz)}: ${kwh(m.total)} kWh"
+            aria-label="Noche del ${fecha(m.inicio, tz)}: ${kwh(m.total)} kWh" aria-pressed=${String(i === sel)}
             @click=${() => (this._sel = i)}>
             ${this._pila(t, ((t[0] + t[1] + t[2]) / max) * 100)}
             <div class="lab">${(idx.length - 1 - k) % paso === 0 ? fecha(m.inicio, tz) : ""}</div>

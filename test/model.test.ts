@@ -149,3 +149,11 @@ describe("horas", () => {
     expect(horas({}, ["a", "b", "c"])).toEqual([]);
   });
 });
+
+describe("orden del historial", () => {
+  it("es el de APARATOS de tools/noche_solar.py y leerHistorial lo usa por defecto", async () => {
+    const { SLUGS_HISTORIAL } = await import("../src/model");
+    expect(SLUGS_HISTORIAL).toEqual(SLUGS);
+    expect(leerHistorial([COMPACTA_EJEMPLO]).noches[0].aparatos.aerotermia).toEqual([3.6, 1.5, 0]);
+  });
+});

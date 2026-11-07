@@ -1,6 +1,6 @@
 import { describe, it, expect, vi } from "vitest";
 import "../src/noche-solar-card";
-import { APARATOS, ATTRS_EJEMPLO, noches } from "./fixtures";
+import { APARATOS, ATTRS_EJEMPLO, COMPACTA_EJEMPLO, noches } from "./fixtures";
 
 type Card = HTMLElement & { setConfig(c: unknown): void; hass: unknown; updateComplete: Promise<boolean> };
 
@@ -106,6 +106,20 @@ describe("historial", () => {
     expect(next().disabled).toBe(false);
     await m.click(next());
     expect(m.$(".nav .d")?.textContent).toContain("05-11 → 06-11");
+  });
+
+  it("el historial se lee siempre en el orden de APARATOS, aunque la config tenga otros aparatos u otro orden", async () => {
+    const config = { ...CONFIG, aparatos: [{ slug: "otros", nombre: "Resto" }, { slug: "jacuzzi", nombre: "Jacuzzi" }, { slug: "aerotermia", nombre: "Aero" }] };
+    const m = await mount(makeHass(ATTRS_EJEMPLO, [COMPACTA_EJEMPLO]), config);
+    await m.click(m.$$(".sec > button")[1]);
+    const filasHist = m.$$(".sec .body .row").map((r) => [r.querySelector(".n")?.textContent?.trim(), r.querySelector(".num")?.textContent?.replace(/\s+/g, " ").trim()]);
+    expect(filasHist).toEqual([["Aero", "5,1 (3,6 + 1,5)"], ["Resto", "2,6 (1,3 + 1,3)"], ["Jacuzzi", "2,0 (0 + 2,0)"]]);
+    expect(m.$(".hist .col")?.getAttribute("aria-label")).toContain("05-11");
+  });
+
+  it("getStubConfig da los sensores del paquete", () => {
+    const cls = customElements.get("noche-solar-card") as unknown as { getStubConfig(): unknown };
+    expect(cls.getStubConfig()).toEqual({ entity: "sensor.noche_solar", historial: "sensor.noche_solar_historial", energia: ENERGIA });
   });
 
   it("las barras son las 14 últimas noches y tocar una la elige", async () => {
